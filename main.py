@@ -1,70 +1,100 @@
-from enum import Enum
+import pygame
 
-class Team(Enum):
-    NONE = 0
-    CROSS = 1
-    CIRCLE = 2
+import checkers
+from vector2 import Vector2
 
-    def next(self):
-        if self == Team.CROSS:
-            return Team.CIRCLE
-        return Team.CROSS
+board = checkers.Board(8)
 
-class Board:
-    def __init__(self):
-        self.player = Team.CROSS
-        self.data = [Team.NONE for _ in range(9)]
+class Spritesheet:
+    def __init__(self, sheet, colorkey):
+        self.sheet = sheet
+        self.colorkey = colorkey
 
-    def play(self, index):
-        self.data[index] = self.player
-        self.player = self.player.next()
+    def read_image(self, rect):
+        image = pygame.Surface(rect.size)
+        image.blit(self.sheet, (0, 0), rect)
+        image.set_colorkey(self.colorkey)
+        return image
 
-    def clear(self, index):
-        self.data[index] = Team.NONE
-        self.player = self.player.next()
+    def read_images(self, rects):
+        return [self.read_image(rect) for rect in rects]
 
-    def at(self, index) -> Team:
-        return self.data[index]
+pygame.init()
 
-    def won(self) -> Team:
-        magic = [
-            [0, 1, 2],
-            [3, 4, 5],
-            [6, 7, 8],
-            [0, 3, 6],
-            [1, 4, 7],
-            [2, 5, 8],
-            [0, 4, 5],
-            [2, 4, 6],
-        ]
+board_image = pygame.image.load("./resources/boards/board_plain_01.png")
+board_width, board_height = board_image.get_size()
 
-        for indices in magic:
-            for team in [Team.CROSS, Team.CIRCLE]:
-                if all(self.data[i] == team for i in indices):
-                    return team
+assert board_width == board_height, "Invaild board format"
 
-        return Team.NONE
+checkers_image_sheet = pygame.image.load("./resources/checkers_topDown.png")
+checkers_spritesheet = Spritesheet(checkers_image_sheet, (0, 0, 0, 0))
 
-    def hash(self):
-        cross = [team == Team.CROSS for team in self.data]
-        circle = [team == Team.CIRCLE for team in self.data]
-        hash = cross + circle + [self.player == Team.CROSS]
-        return sum(map(lambda x: x[1] << x[0], enumerate(hash)))
+checkers_rects = [pygame.Rect(16 * i, 0, 16, 16) for i in range(4)]
+checkers_images = checkers_spritesheet.read_images(checkers_rects)
 
-board = Board()
+info = pygame.display.Info()
+dimensions = info.current_w, info.current_h
 
-def backtrack(steps):
-    global ties
+scale = ((min(dimensions) // 2) // board_width + 1)
 
-    if steps == 9:
-        if board.won() == Team.NONE:
-            ties += 1
-        return
+screen_size = board_width * scale
 
-    for i in range(9):
-        if board.at(i) == Team.NONE:
-            board.play(i)
-            backtrack(steps + 1)
-            board.clear(i)
+board_image = pygame.transform.scale(board_image, (screen_size, screen_size))
+checkers_images = [pygame.transform.scale(checker_image, (16 * scale, 16 * scale)) for checker_image in checkers_images]
 
-board.hash()
+checker_size = 16 * scale
+margin = (screen_size - 8 * checker_size) // 2
+
+surface = pygame.display.set_mode((screen_size, screen_size))
+clock = pygame.time.Clock()
+
+moves = None
+selected = None
+
+done = False
+while not done:
+    if board.player == checkers.Team.WHITE:  # AI's turn
+        _, best_move = board.minimax(8, True)  # Depth of 3, AI is the maximizing player
+        if best_move:
+            board.play(best_move)  # Play the best move found by the AI
+    else:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                done = True
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                x, y = event.pos
+                board_x = (x - margin) // checker_size
+                board_y = (y - margin) // checker_size
+                selected = Vector2(board_x, board_y)
+
+        surface.blit(board_image, (0, 0))
+
+
+        if selected:
+            if piece := board.at(selected):
+                moves = [move for move in board.get_moves() if move.beg == selected]
+                for move in moves:
+                    highlight = pygame.Surface((checker_size, checker_size))
+                    highlight.set_alpha(111)
+                    highlight.fill("black")
+                    left = margin + checker_size * move.end.x
+                    top = margin + checker_size * move.end.y
+                    surface.blit(highlight, (left, top))
+            elif move := [move for move in moves if move.end == selected]:
+                board.play(*move)
+                selected = None
+                moves = []
+
+        for i in range(board.size):
+            for j in range(board.size):
+                if piece := board.matrix[i][j]:
+                    index = 0 if piece.team == checkers.Team.WHITE else 2
+                    index = index + 1 if piece.king else index
+                    left = margin + j * checker_size
+                    top = margin + i * checker_size
+                    surface.blit(checkers_images[index], (left, top))
+
+    pygame.display.update()
+
+    clock.tick(60)
